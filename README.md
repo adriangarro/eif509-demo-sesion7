@@ -354,6 +354,7 @@ demo desde cero, reinicien la base (`down -v`).
 |---|---|---|
 | `Cannot connect to the Docker daemon` | Docker Desktop apagado | Abrirlo, esperar el ícono estable, reintentar |
 | `Connection to localhost:5432 refused` en `bootRun` | La base del compose no está arriba | `docker compose up -d` |
+| `Bind for 0.0.0.0:5432 failed: port is already allocated` | Otro PostgreSQL ya usa el puerto (por ejemplo, la base de otra sesión del curso) | `docker ps` para ver cuál; detenerlo con `docker compose down` en **su** carpeta, o cambiar a `"5433:5432"` en `docker-compose.yml` y `localhost:5433` en `application.properties` |
 | `PedidoYaConfirmadoException` en `feliz` | Ya se corrió antes | Es correcto; `docker compose down -v` para repetir desde cero |
 | `Could not find a valid Docker environment` en las pruebas con Docker corriendo | Testcontainers viejo vs Docker Engine 29 | Ya resuelto: `ext['testcontainers.version'] = '1.21.4'` en `build.gradle` (ver Sesión 6) |
 | `Could not open JPA EntityManager for transaction` en la segunda clase de prueba | Un contenedor por clase + contexto de Spring cacheado | Contenedor **compartido** (singleton) en `PostgresContainerBase`; ver el comentario ahí |

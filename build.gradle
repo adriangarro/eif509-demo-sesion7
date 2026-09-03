@@ -1,0 +1,46 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.3.2'
+    id 'io.spring.dependency-management' version '1.1.6'
+}
+
+group = 'cr.una.eif509'
+version = '0.0.1-SNAPSHOT'
+
+// El BOM de Spring Boot 3.3.x fija Testcontainers 1.19.8, cuyo
+// docker-java no habla con Docker Engine 29+. Esta propiedad
+// sube TODOS los módulos de Testcontainers a la versión indicada.
+ext['testcontainers.version'] = '1.21.4'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // La dependencia de la sesión: trae JPA, Hibernate y Spring Data.
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+    // Flyway como dependencia de la aplicación: Spring Boot aplica las
+    // migraciones al arrancar, ANTES de que Hibernate valide las entidades.
+    // (En la Sesión 3 se corría aparte con ./gradlew flywayMigrate.)
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-database-postgresql'
+
+    runtimeOnly 'org.postgresql:postgresql'
+
+    // Dependencias de PRUEBA: no tocan el código de producción.
+    // Testcontainers arranca contenedores Docker desde las pruebas.
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.testcontainers:junit-jupiter:1.21.4'
+    testImplementation 'org.testcontainers:postgresql:1.21.4'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}

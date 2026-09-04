@@ -5,7 +5,7 @@ Basadas en Web"** (Universidad Nacional, Costa Rica).
 
 Esta demo continúa el proyecto de la
 [Sesión 6 (Testcontainers)](https://github.com/adriangarro/eif509-demo-sesion6):
-mismas entidades, mismas pruebas — ahora con una **capa de servicios** que
+mismas entidades, mismas pruebas, ahora con una **capa de servicios** que
 orquesta un proceso de negocio de tres pasos y lo protege con
 `@Transactional`. La serie completa:
 [Sesión 3 (PostgreSQL + Flyway)](https://github.com/adriangarro/eif509-demo-sesion3)
@@ -17,19 +17,19 @@ orquesta un proceso de negocio de tres pasos y lo protege con
 
 El proceso **confirmar pedido** = reservar inventario + crear factura +
 registrar bitácora: **juntos o ninguno**. Al final de esta guía habrán
-visto, con sus propios ojos y en la base de datos:
+observado directamente en la base de datos:
 
-1. **La corrida feliz**: las tres tablas cambian en una sola transacción.
-2. **El fallo inyectado**: la factura revienta en el paso 2 por una regla
-   de negocio, y el inventario reservado en el paso 1 **vuelve solo**
-   (rollback total, cero basura).
+1. **El caso exitoso**: las tres tablas cambian en una sola transacción.
+2. **El fallo inyectado**: la factura falla en el paso 2 por una regla
+   de negocio, y el inventario reservado en el paso 1 **se restaura
+   automáticamente** (rollback total, sin datos residuales).
 3. **La auditoría que sobrevive**: un registro con `REQUIRES_NEW` queda
    guardado *aunque* el proceso principal haga rollback.
 4. **La prueba que lo garantiza para siempre**: `assertThatThrownBy` +
    verificación de que el estado quedó intacto, sobre un PostgreSQL real
    (Testcontainers, Sesión 6).
 
-Y de paso, los criterios de la sesión en código:
+Además, los criterios de la sesión llevados a código:
 
 - Las **reglas viven en el servicio**; las **invariantes simples en la
   entidad** (`Inventario.reservar`, `Pedido.confirmar`); el `CHECK` del
@@ -37,7 +37,7 @@ Y de paso, los criterios de la sesión en código:
 - Cada regla violada produce una **excepción de negocio nombrada**
   (`InventarioInsuficienteException`, `MontoFacturaExcedidoException`,
   `PedidoYaConfirmadoException`, `PedidoNoExisteException`) que extiende
-  `RuntimeException` — por eso dispara el rollback.
+  `RuntimeException`; por eso dispara el rollback.
 - **Bloqueo optimista** con `@Version` en `inventario`: se ve en el
   `UPDATE ... WHERE id=? AND version=?` del log.
 
@@ -105,7 +105,7 @@ Los pedidos semilla que usa la demo:
 
 | Pedido | Producto | Qué pasa al confirmarlo |
 |---|---|---|
-| **1** | Teclado x1, ₡15 000 | **Corrida feliz** |
+| **1** | Teclado x1, ₡15 000 | **Caso exitoso** |
 | **9** | Laptop x1, ₡66 000 | Falla en el paso 2: supera el límite de facturación automática (₡50 000) |
 | **7** | Silla x3 (hay 2) | Falla en el paso 1: inventario insuficiente |
 
@@ -118,7 +118,7 @@ git clone https://github.com/adriangarro/eif509-demo-sesion7.git
 cd eif509-demo-sesion7
 ```
 
-### 2. Verificar que Docker Desktop está corriendo
+### 2. Verificar que Docker Desktop está en ejecución
 
 ```bash
 docker info
@@ -148,11 +148,11 @@ verifiquen con `"$JAVA_HOME/bin/java" -version`).
 
 ## Ejecución de la demo
 
-La demo se elige por argumento. Cada corrida imprime el **log de
+La demo se elige por argumento. Cada ejecución imprime el **log de
 transacciones** (líneas `JpaTransactionManager`), el **SQL** que Hibernate
 envía, y al final el **estado de la base** en bloque.
 
-### 5. Corrida feliz: las tres tablas cambian
+### 5. Caso exitoso: las tres tablas cambian
 
 ```bash
 ./gradlew bootRun --args='feliz'
@@ -193,11 +193,12 @@ intento_confirmacion (auditoría, REQUIRES_NEW):
   #1 pedido=1 OK
 ```
 
-Tres escrituras, una transacción, un commit. Fíjense en el `UPDATE` de
-inventario: `WHERE id=? AND version=?` — eso es el bloqueo optimista de
+Tres escrituras, una transacción, un commit. Observen el `UPDATE` de
+inventario: `WHERE id=? AND version=?` es el bloqueo optimista de
 `@Version`. Si otra transacción hubiera cambiado la fila entre la lectura
 y la escritura, afectaría 0 filas y Hibernate lanzaría
-`OptimisticLockException` en vez de pisar el cambio ajeno.
+`OptimisticLockException` en lugar de sobrescribir el cambio de la otra
+transacción.
 
 ### 6. Verlo en la base con SQL directo
 
@@ -210,7 +211,7 @@ docker compose exec db psql -U dev -d eif509 -c 'SELECT id, pedido_id, evento FR
 Salida esperada: el teclado con `disponible = 9` y `version = 1`, una
 factura y una fila de bitácora, ambas del pedido 1.
 
-### 7. Inyectar el fallo: la factura revienta en el paso 2
+### 7. Inyectar el fallo: la factura falla en el paso 2
 
 ```bash
 ./gradlew bootRun --args='fallo'
@@ -222,12 +223,12 @@ automática. Qué observar:
 ```text
 Creating new transaction with name [...PedidoService.confirmarPedido]
 select ... from pedido ... / select ... from inventario ...
-update inventario set disponible=?, ... where id=? and version=?      <- el paso 1 SÍ escribió
-Participating in existing transaction                                 <- FacturaService.crear entra...
-Participating transaction failed - marking existing transaction as rollback-only   <- ...y lanza la regla
+update inventario set disponible=?, ... where id=? and version=?      <- el paso 1 sí escribió
+Participating in existing transaction                                 <- FacturaService.crear se une...
+Participating transaction failed - marking existing transaction as rollback-only   <- ...y la regla lanza la excepción
 Suspending current transaction, creating new transaction with name [...AuditoriaService.registrarIntento]
 insert into intento_confirmacion ...
-Initiating transaction commit                                         <- la auditoría se confirma sola
+Initiating transaction commit                                         <- la auditoría se confirma por separado
 Resuming suspended transaction after completion of inner transaction
 Initiating transaction rollback                                       <- el proceso completo se deshace
 Rolling back JPA transaction on EntityManager [...]
@@ -264,10 +265,10 @@ docker compose exec db psql -U dev -d eif509 -c "SELECT id, cantidad, total, est
 docker compose exec db psql -U dev -d eif509 -c 'SELECT id, pedido_id, resultado FROM intento_confirmacion ORDER BY id;'
 ```
 
-Laptop sigue en 3 con `version = 0`; el pedido 9 sigue `CREADO`; la
-auditoría tiene el intento fallido.
+El inventario de la laptop sigue en 3 con `version = 0`; el pedido 9 sigue
+`CREADO`; la auditoría registra el intento fallido.
 
-### 9. (Extra) Fallar en el paso 1: sin inventario
+### 9. (Adicional) Fallar en el paso 1: sin inventario
 
 ```bash
 ./gradlew bootRun --args='sinstock'
@@ -275,7 +276,7 @@ auditoría tiene el intento fallido.
 
 El pedido 7 pide 3 sillas y hay 2. La invariante de la **entidad**
 (`Inventario.reservar`) lanza `InventarioInsuficienteException` antes de
-que salga ningún `UPDATE`: en el log no hay escrituras del proceso, solo
+que se emita ningún `UPDATE`: en el log no hay escrituras del proceso, solo
 la auditoría y el rollback.
 
 ### 10. La prueba que lo garantiza para siempre
@@ -284,9 +285,9 @@ la auditoría y el rollback.
 ./gradlew test
 ```
 
-No hace falta la base del compose: Testcontainers levanta un PostgreSQL
-propio (Sesión 6). Salida esperada: `BUILD SUCCESSFUL`, 8 pruebas en
-verde (3 de repositorio + 5 del servicio). La que importa hoy, en
+No es necesaria la base del compose: Testcontainers levanta un PostgreSQL
+propio (Sesión 6). Salida esperada: `BUILD SUCCESSFUL`, 8 pruebas
+aprobadas (3 de repositorio + 5 del servicio). La prueba central de hoy, en
 [`PedidoServiceIT`](src/test/java/cr/una/eif509/demo/service/PedidoServiceIT.java):
 
 ```java
@@ -307,9 +308,9 @@ void falloEnLaFacturaDeshaceLaReservaDeInventario() {
 Este es el guion literal del Lab 4: *proceso multi-paso donde un fallo
 intermedio provoca rollback verificable mediante una prueba*.
 
-### 11. El mismo verde en el CI
+### 11. El mismo resultado en el CI
 
-Cada push corre la suite completa en GitHub Actions
+Cada push ejecuta la suite completa en GitHub Actions
 ([.github/workflows/ci.yml](.github/workflows/ci.yml)) con Testcontainers.
 
 ## Cómo leer el log de transacciones
@@ -319,7 +320,7 @@ Cada push corre la suite completa en GitHub Actions
 | `Creating new transaction with name [...]` | Empieza la transacción del método de servicio |
 | `Participating in existing transaction` | Un servicio anidado con `REQUIRED` se **une** a la que ya existe |
 | `Participating transaction failed - marking existing transaction as rollback-only` | Un servicio anidado lanzó: la transacción compartida ya no puede confirmarse |
-| `Suspending current transaction, creating new transaction with name [...]` | `REQUIRES_NEW`: la actual se pausa y nace una independiente |
+| `Suspending current transaction, creating new transaction with name [...]` | `REQUIRES_NEW`: la actual se suspende y se crea una independiente |
 | `Resuming suspended transaction after completion of inner transaction` | La independiente terminó (con su propio commit); vuelve la principal |
 | `Initiating transaction commit` | Todo lo enviado se confirma |
 | `Initiating transaction rollback` | Todo lo enviado se deshace |
@@ -327,7 +328,7 @@ Cada push corre la suite completa en GitHub Actions
 Dos detalles de diseño que se ven en el código:
 
 - `PedidoService` **relanza** la excepción después de auditar. Si la
-  tragara, Spring intentaría confirmar una transacción ya marcada
+  capturara sin relanzarla, Spring intentaría confirmar una transacción ya marcada
   `rollback-only` y fallaría con `UnexpectedRollbackException`.
 - `AuditoriaService` es **otro bean**. `@Transactional` funciona por
   proxy: una llamada a un método de la misma clase no pasa por el proxy
@@ -338,14 +339,14 @@ Dos detalles de diseño que se ven en el código:
 | Acción | Comando |
 |---|---|
 | Levantar la base | `docker compose up -d` |
-| Correr una demo | `./gradlew bootRun --args='feliz'` (o `fallo`, `sinstock`, `estado`) |
+| Ejecutar una demo | `./gradlew bootRun --args='feliz'` (o `fallo`, `sinstock`, `estado`) |
 | Ver el estado sin confirmar nada | `./gradlew bootRun --args='estado'` |
-| Correr las pruebas | `./gradlew test` |
+| Ejecutar las pruebas | `./gradlew test` |
 | Reiniciar la demo desde cero | `docker compose down -v && docker compose up -d` |
 | Detener (conserva los datos) | `docker compose down` |
 
-Ojo: `feliz` confirma el pedido 1; correrlo **dos veces** produce
-`PedidoYaConfirmadoException` — la invariante funciona. Para repetir la
+Importante: `feliz` confirma el pedido 1; ejecutarlo **dos veces** produce
+`PedidoYaConfirmadoException`, lo cual confirma que la invariante funciona. Para repetir la
 demo desde cero, reinicien la base (`down -v`).
 
 ## Solución de problemas
@@ -353,11 +354,11 @@ demo desde cero, reinicien la base (`down -v`).
 | Problema | Causa | Solución |
 |---|---|---|
 | `Cannot connect to the Docker daemon` | Docker Desktop apagado | Abrirlo, esperar el ícono estable, reintentar |
-| `Connection to localhost:5432 refused` en `bootRun` | La base del compose no está arriba | `docker compose up -d` |
+| `Connection to localhost:5432 refused` en `bootRun` | La base del compose no está en ejecución | `docker compose up -d` |
 | `Bind for 0.0.0.0:5432 failed: port is already allocated` | Otro PostgreSQL ya usa el puerto (por ejemplo, la base de otra sesión del curso) | `docker ps` para ver cuál; detenerlo con `docker compose down` en **su** carpeta, o cambiar a `"5433:5432"` en `docker-compose.yml` y `localhost:5433` en `application.properties` |
-| `PedidoYaConfirmadoException` en `feliz` | Ya se corrió antes | Es correcto; `docker compose down -v` para repetir desde cero |
-| `Could not find a valid Docker environment` en las pruebas con Docker corriendo | Testcontainers viejo vs Docker Engine 29 | Ya resuelto: `ext['testcontainers.version'] = '1.21.4'` en `build.gradle` (ver Sesión 6) |
-| `Could not open JPA EntityManager for transaction` en la segunda clase de prueba | Un contenedor por clase + contexto de Spring cacheado | Contenedor **compartido** (singleton) en `PostgresContainerBase`; ver el comentario ahí |
+| `PedidoYaConfirmadoException` en `feliz` | Ya se ejecutó antes | Es correcto; `docker compose down -v` para repetir desde cero |
+| `Could not find a valid Docker environment` en las pruebas con Docker en ejecución | Testcontainers 1.19.x incompatible con Docker Engine 29 | Ya resuelto: `ext['testcontainers.version'] = '1.21.4'` en `build.gradle` (ver Sesión 6) |
+| `Could not open JPA EntityManager for transaction` en la segunda clase de prueba | Un contenedor por clase + contexto de Spring cacheado | Contenedor **compartido** (singleton) en `PostgresContainerBase`; ver el comentario en esa clase |
 | `Schema-validation: ...` al arrancar | Una entidad no coincide con V4 | Leer el error: dice qué columna o tipo falló |
 | `Unable to locate a Java Runtime` | Falta el JDK o `JAVA_HOME` | Ver Requisitos previos |
 
@@ -370,7 +371,8 @@ prueba que la exige**, y un proceso multi-paso donde un fallo intermedio
 provoque **rollback verificable mediante una prueba**. El taller de hoy
 (listar los pasos del proceso, nombrar las excepciones, esqueleto del
 servicio `@Transactional`) es el 40 % del laboratorio resuelto por
-adelantado. Este repo es el mapa; su proceso es el territorio.
+adelantado. Este repositorio muestra la mecánica; el contenido debe ser el de
+su propio proceso de negocio.
 
 ---
 
